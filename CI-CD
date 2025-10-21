@@ -1,0 +1,83 @@
+pipeline{
+    agent any
+    tools {
+        jdk 'jdk'
+        nodejs 'node'
+    }
+    environment{
+        SCANNER_HOME = tool 'sonar-scanner'
+        IMAGE_NAME = demo
+        IMAGE_TAG = latest
+        CLUSTER_NAME = demo1
+        REGION = ap-south-1
+        DOCKERHUB_REPO = dockerhub-username/demo
+    }
+    stages{
+        stage('clean workspace'){
+            steps{
+                cleanWs()
+            }
+        }
+        stage('checkout scm'){
+            steps{
+                checkout scm
+            }
+        }
+        stage('sonarqube analysis'){
+            steps{
+                withSonarQubeEnv('sonarQubee'){
+                    sh ''' $SONAR_HOME/bin/sonar-scanner \ 
+                    -DSonar.peojectName=demo \
+                    -DSonar.projectKey=<nvdKey> '''
+                }
+            }
+        }
+        stage('quality gate'){
+            steps{
+                waitForQualityGate abortPipeline: true, credentiasId: 'sonar-token'
+            }
+        }
+        stage('install dependencies'){
+            steps{
+                sh 'npm install'
+            }
+        }
+        stage('docker build and push'){
+            steps{
+                script{
+                    withCredentials([usernamePasswordCredentials(credentialsId: 'dockerhub-creds', DOCKER_USERNAME_VAR: 'DOCKER_USER', DOCKER_PASSWORD_VAR: 'DOCKER_PASSWORD')])
+                    sh 'docker build -t $IMAGE_NAME:$IMAGE_TAG .'
+                    sh 'docker tag $IMAGE_NAME:$IMAGE_TAG $DOCKERHUB_REPO:$IMAGE_TAG'
+                    sh 'docker push $DOCKERHUB_REPO:$IMAGE_TAG'                    
+                }
+            }
+        }
+        stage('deploy to eks'){
+            steps{
+                withCredentials([string(credentialsId: 'AWS_ACCESS_KEY', variable: 'AWS_ACCESS_KEY')
+                string(credentialsID: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')])
+                {
+                    sh '''
+                     aws eks update kube-config --name $CLUSTER_NAME --region $REGION
+                     helm upgrade --install <release-name> <chart-name> -f <chart-name>/values.yaml
+                     --set image.repository=$DOCKERHUB_REPO \
+                     --set image.tag=$IMAGE_TAG '''
+                }
+
+
+            }
+        }
+    }
+}
+post {
+    always{
+        echo 'pipeline completed'
+    }
+    success{
+        echo "pipeline is success"
+    }
+    failure{
+        echo "pipeline failed"
+    }
+
+}
