@@ -1,0 +1,33 @@
+name: build-deploy
+on:
+  push:
+    branches: 
+      - main
+jobs: 
+  build-deploy: 
+    runs-on: ubuntu-latest
+    env:
+     cluster_name: demo_cluster
+     region: ap-south-1
+
+    steps: 
+      - name: checkout-source-code
+        uses: actions/checkout@v3
+      - name: login to docker login-to-docker-hub
+        uses: docker/login-actions@v2
+      - name: build docker image
+        run: docker build -t {{secrets.image_name}}:${{secrets.image_tag}} .
+      - name: push docker image
+        run: docker push {{secrets.dockerhub_repo}}:${{secrets.image_tag}}
+      - name: aws-actions/configure-aws-credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key: {{secrets.aws_access_key}}
+          aws-secret-access-key: {{secrets.aws_secret.access_key}}
+      - name: update kube-config 
+        run: aws eks update kube-config --name ${env.cluster_name} --region ${env.region}
+      - name: deploy to eks
+        run: | 
+          helm upgrade --install releas-name ./chart-name -f ./chart-name/values.yaml \
+          --set image.repository=${{secrets.dockerhub_repo}} \
+          --set image.tag=${{secrets.image_tag}}
